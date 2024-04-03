@@ -1,0 +1,133 @@
+#### Libraries
+
+from os import makedirs
+from os.path import exists, join
+from argparse import ArgumentParser
+
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+import matplotlib.pyplot as plt
+
+from Model.model import CustomVAE
+from data_module import VP_DataModule
+from Utils.aux import create_dir
+import torch
+
+#### Functions and Classes
+
+def main_func(args):
+    """
+    docstring goes here.
+    """
+    dict_args = vars(args)
+
+    
+    if args.everything_seed is not None:
+        pl.seed_everything(args.everything_seed)
+    
+    # Iniatiating the DataModule
+    data_module = VP_DataModule(**dict_args)
+    #model = CustomVAE(**dict_args)
+
+    
+    inv_transformations_read_dir="/home/axh5735/projects/signal_compression/logs/compression_128_256/transformation"
+    model = CustomVAE(input_height=128, enc_type='resnet18', first_conv=False, maxpool1=False, enc_out_dim=512, kl_coeff=0.1, latent_dim=256,inv_transformations_read_dir=inv_transformations_read_dir,lr=1e-4)
+    
+    ch=torch.load('/home/axh5735/projects/signal_compression/quantization/nn256.ckpt')
+    model.load_state_dict(ch)
+
+   
+  
+    
+
+    model.eval()
+
+      
+
+    tb_logger = TensorBoardLogger(args.logging_dir, name=args.logging_name, log_graph=False)
+    
+    trainer = pl.Trainer.from_argparse_args(
+        args,
+        logger = tb_logger,
+        callbacks = [EarlyStopping(monitor="val_loss", patience=10, mode="min", log_rank_zero_only=True)]
+    )
+    
+    
+
+    if args.auto_lr_find:
+        # Run learning rate finder
+        
+        lr_finder = trainer.tuner.lr_find(model, data_module)
+
+        
+
+        # Results can be found in
+        lr_finder.results
+
+        # Plot with
+        fig = lr_finder.plot(suggest=True)
+        plt.savefig(join(args.logging_dir, args.logging_name, "lr_tuning.png"))
+
+        # Pick point based on plot, or get suggestion
+        new_lr = lr_finder.suggestion()
+
+        # update hparams of the model
+        model.hparams.lr = new_lr
+        print(f"Learning rate set to {new_lr}")
+    else:
+        trainer.tune(model, data_module)
+        #print(66)
+        #pass
+    
+    #trainer.fit(model, data_module)
+    #trainer.validate(model, data_module)
+    trainer.test(model, data_module)
+    
+    
+if __name__ == '__main__':
+    parser = ArgumentParser()
+
+    # Program Level Args
+
+    # -> Main Function Args
+
+    
+    parser.add_argument(
+        "--everything_seed",
+        type = int,
+        default = None,
+        help = "Seed used with pl.seed_everything(). If provided, everything would be reproducible except the patching coordinates. [default: None]"
+    )
+    
+
+    parser.add_argument(
+        "--logging_dir",
+        type = str,
+        default = "./logs",
+        help = "Address of the logs directory. [default: ./logs]"
+    )
+
+    parser.add_argument(
+        "--logging_name",
+        type = str,
+        default = "experiment",
+        help = "name of the current experiment. [default: experiment]"
+    )
+    
+    # dataset specific args
+    parser = VP_DataModule.add_dataset_specific_args(parser)
+
+    # model specific args
+    parser = CustomVAE.add_model_specific_args(parser)
+
+    # trainer args
+    parser = pl.Trainer.add_argparse_args(parser)
+    
+    # parsing args
+    args = parser.parse_args()
+    
+   
+    # Calling the main function
+    main_func(args)
+    
